@@ -41,6 +41,9 @@ const foodState = {
   category: "all",
   distance: "nearby",
   merchants: [],
+  candidateCount: 0,
+  resolvedCenter: null,
+  resolvedInputValue: "",
   lastSearchKey: "",
 };
 const questTitles = {
@@ -111,8 +114,13 @@ function setSelected(group, value) {
 }
 
 function getFoodSearchKey() {
+  const resolvedCenterKey = foodState.resolvedCenter
+    ? foodState.resolvedCenter.map((value) => Number(value).toFixed(6)).join(",")
+    : "";
+
   return [
     foodPlaceInput?.value.trim() || "",
+    resolvedCenterKey,
     foodState.category,
     foodState.distance,
   ].join("|");
@@ -221,9 +229,8 @@ function getFoodRadius() {
 
 function getFoodKeywords() {
   const keywords = {
-    all: ["餐饮服务", "餐厅", "美食", "小吃", "中餐厅", "火锅", "烧烤", "快餐", "咖啡", "奶茶", "甜品", "饮品"],
+    all: ["餐饮服务", "餐厅", "美食", "小吃", "中餐厅", "火锅", "烧烤", "快餐", "咖啡", "奶茶", "饮品"],
     meal: ["餐饮服务", "餐厅", "中餐厅", "火锅", "烧烤", "快餐", "小吃", "茶餐厅", "粤菜"],
-    dessert: ["甜品", "蛋糕", "面包", "糖水", "冰淇淋", "烘焙"],
     drink: ["奶茶", "咖啡", "饮品", "茶饮", "咖啡厅"],
   };
 
@@ -319,12 +326,75 @@ function formatLocation(location) {
   return `${lng.toFixed(6)},${lat.toFixed(6)}`;
 }
 
+function getLocationArray(location) {
+  const [lng, lat] = readLngLat(location);
+
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+    return null;
+  }
+
+  return [lng, lat];
+}
+
+function formatReadableAddress(regeocode, fallback = "") {
+  const component = regeocode?.addressComponent || {};
+  const district = typeof component.district === "string" ? component.district : "";
+  const township = typeof component.township === "string" ? component.township : "";
+  const neighborhood = typeof component.neighborhood?.name === "string" ? component.neighborhood.name : "";
+  const building = typeof component.building?.name === "string" ? component.building.name : "";
+  const street = typeof component.streetNumber?.street === "string" ? component.streetNumber.street : "";
+  const streetNumber = typeof component.streetNumber?.number === "string" ? component.streetNumber.number : "";
+  const shortAddress = [district, neighborhood || township, building, `${street}${streetNumber}`]
+    .filter(Boolean)
+    .join("");
+
+  return shortAddress || regeocode?.formattedAddress || fallback;
+}
+
+function reverseGeocodeLocation(AMap, location, fallback = "") {
+  const center = normalizeAmapCenter(AMap, location);
+
+  return new Promise((resolve) => {
+    const geocoder = new AMap.Geocoder();
+    geocoder.getAddress(center, (status, result) => {
+      if (status === "complete" && result?.regeocode) {
+        resolve(formatReadableAddress(result.regeocode, fallback));
+      } else {
+        resolve(fallback || formatLocation(location));
+      }
+    });
+  });
+}
+
+function setResolvedFoodPlace(label, location) {
+  const locationArray = getLocationArray(location);
+  const displayLabel = label || formatLocation(location);
+
+  foodState.resolvedCenter = locationArray;
+  foodState.resolvedInputValue = displayLabel;
+
+  if (foodPlaceInput) {
+    foodPlaceInput.value = displayLabel;
+  }
+}
+
+function getFoodSearchTarget() {
+  const typedPlace = foodPlaceInput?.value.trim() || "";
+
+  if (foodState.resolvedCenter && typedPlace === foodState.resolvedInputValue) {
+    return foodState.resolvedCenter;
+  }
+
+  return typedPlace;
+}
+
 function updateFoodResolveButton() {
   if (!foodResolveButton || !foodPlaceInput) return;
 
   const hasTypedPlace = foodPlaceInput.value.trim().length > 0;
   const isCoordinate = /^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/.test(foodPlaceInput.value);
-  foodResolveButton.hidden = !hasTypedPlace || isCoordinate;
+  const isResolvedPlace = foodState.resolvedCenter && foodPlaceInput.value.trim() === foodState.resolvedInputValue;
+  foodResolveButton.hidden = !hasTypedPlace || isCoordinate || isResolvedPlace;
 }
 
 function isSpecificPlaceName(place) {
@@ -372,17 +442,17 @@ function searchNearbyPage(AMap, center, keyword, radius, pageIndex) {
 
 async function searchFoodMerchants(place) {
   const AMap = await loadAmap();
-  const rawCenter = await geocodePlace(AMap, place);
+  const rawCenter = getLocationArray(place) || await geocodePlace(AMap, place);
   const center = normalizeAmapCenter(AMap, rawCenter);
   const keywords = getFoodKeywords().slice(0, foodState.category === "all" ? 8 : 6);
   const radius = getFoodRadius();
   const merchants = [];
   const seen = new Set();
 
-  for (let pageIndex = 1; pageIndex <= maxFoodPagesPerKeyword && merchants.length < maxFoodCandidates; pageIndex += 1) {
+  for (let pageIndex = 1; pageIndex <= maxFoodPagesPerKeyword; pageIndex += 1) {
     const pages = [];
 
-    for (let index = 0; index < keywords.length && merchants.length < maxFoodCandidates; index += maxFoodKeywordBatchSize) {
+    for (let index = 0; index < keywords.length; index += maxFoodKeywordBatchSize) {
       const keywordBatch = keywords.slice(index, index + maxFoodKeywordBatchSize);
       const batchPages = await Promise.all(keywordBatch.map(async (keyword) => {
         const pois = await searchNearbyPage(AMap, center, keyword, radius, pageIndex);
@@ -415,9 +485,10 @@ async function searchFoodMerchants(place) {
     });
   }
 
-  const sortedMerchants = merchants.sort(compareFoodMerchants);
+  const randomCandidatePool = shuffleItems(merchants).slice(0, Math.min(maxFoodCandidates, merchants.length));
+  foodState.candidateCount = randomCandidatePool.length;
 
-  return shuffleItems(sortedMerchants.slice(0, Math.min(maxFoodCandidates, sortedMerchants.length)))
+  return shuffleItems(randomCandidatePool)
     .slice(0, maxFoodResults)
     .sort(compareFoodMerchants);
 }
@@ -443,7 +514,7 @@ function renderFoodResults(merchants) {
 
   foodState.merchants = merchants;
   foodCount.textContent = merchants.length
-    ? `共随机找出${merchants.length}家门店，再次搜索附近美食时，会重新随机抓取门店`
+    ? `已从随机${foodState.candidateCount}家候选门店里抽出${merchants.length}家展示，再次搜索会重新随机抓取`
     : "还没有可随机的商家";
   setFoodRandomDisabled(merchants.length === 0);
   foodResults.innerHTML = merchants.length
@@ -531,6 +602,11 @@ foodDistanceGroup?.addEventListener("click", (event) => {
 });
 
 foodPlaceInput?.addEventListener("input", () => {
+  if (foodPlaceInput.value.trim() !== foodState.resolvedInputValue) {
+    foodState.resolvedCenter = null;
+    foodState.resolvedInputValue = "";
+  }
+
   updateFoodResolveButton();
   updateFoodSearchButtonLabel();
 });
@@ -556,10 +632,11 @@ foodResolveButton?.addEventListener("click", async () => {
       throw new Error("location parse failed");
     }
 
-    foodPlaceInput.value = formattedLocation;
+    const readableAddress = await reverseGeocodeLocation(AMap, location, place);
+    setResolvedFoodPlace(readableAddress, location);
     updateFoodResolveButton();
     updateFoodSearchButtonLabel();
-    renderFoodMessage("定位已确认", `已经识别到“${place}”，现在可以点击“搜索附近美食”。`);
+    renderFoodMessage("定位已确认", `已经识别到“${readableAddress}”，现在可以点击“搜索附近美食”。`);
   } catch {
     renderFoodMessage("搜索定位失败", "这个地点没有识别成功。可以试试加上城市名，例如：深圳 后海地铁站、深圳 某某花园。");
   } finally {
@@ -576,10 +653,13 @@ foodLocateButton?.addEventListener("click", async () => {
   try {
     const position = await getCurrentPosition();
     const { longitude, latitude } = position.coords;
-    foodPlaceInput.value = `${longitude.toFixed(6)},${latitude.toFixed(6)}`;
+    const location = [longitude, latitude];
+    const AMap = await loadAmap();
+    const readableAddress = await reverseGeocodeLocation(AMap, location, "当前位置");
+    setResolvedFoodPlace(readableAddress, location);
     updateFoodResolveButton();
     updateFoodSearchButtonLabel();
-    renderFoodMessage("定位成功", "已经填入当前位置，可以直接点击“搜索附近美食”。");
+    renderFoodMessage("定位成功", `已经定位到“${readableAddress}”，可以直接点击“搜索附近美食”。`);
   } catch {
     renderFoodMessage("定位失败", "没有成功获取当前位置。请确认浏览器允许定位，并尽量在线上 HTTPS 网址中使用。");
   } finally {
@@ -609,7 +689,7 @@ foodSearchButton?.addEventListener("click", async () => {
   renderFoodMessage("正在搜索", "正在根据地点、分类和距离抓取周边美食。通常需要 5-20 秒，商家较多时可能接近 30 秒。");
 
   try {
-    const merchants = await searchFoodMerchants(place);
+    const merchants = await searchFoodMerchants(getFoodSearchTarget());
     foodState.lastSearchKey = getFoodSearchKey();
     renderFoodResults(merchants);
     updateFoodSearchButtonLabel();
