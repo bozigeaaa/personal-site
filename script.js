@@ -48,6 +48,7 @@ const foodState = {
   candidateCount: 0,
   resolvedCenter: null,
   resolvedInputValue: "",
+  shouldKeepResolveButton: false,
   userLocation: null,
   placeSuggestions: [],
   placeSuggestionTimer: null,
@@ -388,6 +389,13 @@ function getPlaceSuggestionLabel(poi) {
     .join(" · ");
 }
 
+function getSelectedPlaceDisplay(poi) {
+  const name = String(poi?.name || "").trim();
+  const label = getPlaceSuggestionLabel(poi);
+
+  return [name, label].filter(Boolean).join("｜");
+}
+
 function hidePlaceSuggestions() {
   foodState.placeSuggestions = [];
   if (foodPlaceSuggestions) {
@@ -460,13 +468,12 @@ async function choosePlaceSuggestion(index) {
   const poi = foodState.placeSuggestions[index];
   if (!poi?.location) return;
 
-  const AMap = await loadAmap();
-  const readableAddress = await reverseGeocodeLocation(AMap, poi.location, getPlaceSuggestionLabel(poi) || poi.name);
-  setResolvedFoodPlace(readableAddress, poi.location);
+  const displayName = getSelectedPlaceDisplay(poi) || poi.name;
+  setResolvedFoodPlace(displayName, poi.location, { keepResolveButton: true });
   hidePlaceSuggestions();
   updateFoodResolveButton();
   updateFoodSearchButtonLabel();
-  renderFoodMessage("定位已确认", `已经选择“${readableAddress}”，现在可以点击“搜索附近美食”。`);
+  renderFoodMessage("定位已确认", `已经选择“${displayName}”，现在可以点击“搜索附近美食”。`);
 }
 
 async function geocodePlace(AMap, place) {
@@ -574,12 +581,13 @@ function reverseGeocodeLocation(AMap, location, fallback = "") {
   });
 }
 
-function setResolvedFoodPlace(label, location) {
+function setResolvedFoodPlace(label, location, options = {}) {
   const locationArray = getLocationArray(location);
   const displayLabel = label || formatLocation(location);
 
   foodState.resolvedCenter = locationArray;
   foodState.resolvedInputValue = displayLabel;
+  foodState.shouldKeepResolveButton = Boolean(options.keepResolveButton);
 
   if (foodPlaceInput) {
     foodPlaceInput.value = displayLabel;
@@ -602,7 +610,7 @@ function updateFoodResolveButton() {
   const hasTypedPlace = foodPlaceInput.value.trim().length > 0;
   const isCoordinate = /^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/.test(foodPlaceInput.value);
   const isResolvedPlace = foodState.resolvedCenter && foodPlaceInput.value.trim() === foodState.resolvedInputValue;
-  foodResolveButton.hidden = !hasTypedPlace || isCoordinate || isResolvedPlace;
+  foodResolveButton.hidden = !hasTypedPlace || isCoordinate || (isResolvedPlace && !foodState.shouldKeepResolveButton);
 }
 
 function isSpecificPlaceName(place) {
@@ -817,6 +825,7 @@ foodPlaceInput?.addEventListener("input", () => {
   if (foodPlaceInput.value.trim() !== foodState.resolvedInputValue) {
     foodState.resolvedCenter = null;
     foodState.resolvedInputValue = "";
+    foodState.shouldKeepResolveButton = false;
   }
 
   updateFoodResolveButton();
