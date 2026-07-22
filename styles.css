@@ -947,6 +947,92 @@ h1 {
   align-items: center;
 }
 
+.place-suggestion-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.place-suggestion-panel[hidden] {
+  display: none;
+}
+
+.place-suggestion-item,
+.place-suggestion-empty {
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  background: var(--white);
+  box-shadow: 3px 4px 0 var(--ink);
+}
+
+.place-suggestion-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 12px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.place-suggestion-item:hover {
+  color: var(--white);
+  background: var(--magenta-dark);
+  transform: translate(2px, 2px);
+  box-shadow: 1px 2px 0 var(--ink);
+}
+
+.place-suggestion-item span {
+  display: grid;
+  gap: 3px;
+}
+
+.place-suggestion-item strong {
+  overflow: hidden;
+  font-size: 0.9rem;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.place-suggestion-item small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.place-suggestion-item:hover small {
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.place-suggestion-item em {
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #fff8cf;
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.place-suggestion-empty {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
 .locate-button {
   min-width: 92px;
   min-height: 52px;
@@ -1680,7 +1766,42 @@ h1 {
   }
 
   .place-input-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .place-input-row input {
+    grid-column: 1 / -1;
+  }
+
+  .place-input-row .locate-search-button:not([hidden]) {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .place-input-row:has(.locate-search-button:not([hidden])) input {
+    grid-column: 1;
+  }
+
+  .place-input-row .locate-button:not(.locate-search-button) {
+    grid-column: 1 / -1;
+  }
+
+  .place-suggestion-panel {
+    gap: 7px;
+  }
+
+  .place-suggestion-item {
+    padding: 8px 9px;
+    gap: 8px;
+  }
+
+  .place-suggestion-item strong {
+    font-size: 0.82rem;
+  }
+
+  .place-suggestion-item small,
+  .place-suggestion-item em {
+    font-size: 0.66rem;
   }
 
   .food-results-head {

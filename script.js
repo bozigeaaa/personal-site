@@ -10,6 +10,7 @@ const questOverlay = document.querySelector("[data-quest-overlay]");
 const questTitle = document.querySelector("[data-quest-title]");
 const questBody = document.querySelector("[data-quest-body]");
 const foodPlaceInput = document.querySelector("[data-food-place]");
+const foodPlaceSuggestions = document.querySelector("[data-place-suggestions]");
 const foodLocateButton = document.querySelector("[data-food-locate]");
 const foodResolveButton = document.querySelector("[data-food-resolve]");
 const foodCategoryGroup = document.querySelector("[data-food-category]");
@@ -33,6 +34,9 @@ const maxFoodResults = 50;
 const maxFoodCandidates = 500;
 const maxFoodPagesPerKeyword = 3;
 const maxFoodKeywordBatchSize = 3;
+const foodSeenStorageKey = "xujiajie-food-seen-counts-v1";
+const maxSeenHistoryItems = 1800;
+const maxPlaceSuggestions = 7;
 const amapConfig = {
   key: "5fef069c3b4e5fc3cfb5a0a641c1ea30",
   securityJsCode: "2ea560f754583f60e6eac1f291ad2899",
@@ -44,6 +48,9 @@ const foodState = {
   candidateCount: 0,
   resolvedCenter: null,
   resolvedInputValue: "",
+  userLocation: null,
+  placeSuggestions: [],
+  placeSuggestionTimer: null,
   lastSearchKey: "",
 };
 const questTitles = {
@@ -80,6 +87,73 @@ function shuffleItems(items) {
   }
 
   return shuffled;
+}
+
+function loadFoodSeenCounts() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(foodSeenStorageKey) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFoodSeenCounts(seenCounts) {
+  try {
+    const entries = Object.entries(seenCounts)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .slice(0, maxSeenHistoryItems);
+    localStorage.setItem(foodSeenStorageKey, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Browsers can block localStorage in strict modes; random selection should still work.
+  }
+}
+
+function getMerchantMemoryKey(merchant) {
+  return String(merchant.id || `${merchant.name || ""}|${merchant.address || ""}`).trim();
+}
+
+function pickWeightedMerchants(merchants, count, shouldRemember = false) {
+  const selected = [];
+  const pool = shuffleItems(merchants);
+  const seenCounts = loadFoodSeenCounts();
+
+  while (pool.length && selected.length < count) {
+    const weightedPool = pool.map((merchant) => {
+      const seenCount = Number(seenCounts[getMerchantMemoryKey(merchant)] || 0);
+      const freshBoost = seenCount === 0 ? 1.35 : 1;
+      const weight = freshBoost / Math.pow(seenCount + 1, 1.75);
+
+      return {
+        merchant,
+        weight: weight * (0.72 + Math.random() * 0.56),
+      };
+    });
+    const totalWeight = weightedPool.reduce((sum, item) => sum + item.weight, 0);
+    let cursor = Math.random() * totalWeight;
+    let pickedIndex = 0;
+
+    for (let index = 0; index < weightedPool.length; index += 1) {
+      cursor -= weightedPool[index].weight;
+      if (cursor <= 0) {
+        pickedIndex = index;
+        break;
+      }
+    }
+
+    const [picked] = pool.splice(pickedIndex, 1);
+    selected.push(picked);
+  }
+
+  if (shouldRemember) {
+    selected.forEach((merchant) => {
+      const key = getMerchantMemoryKey(merchant);
+      seenCounts[key] = Number(seenCounts[key] || 0) + 1;
+    });
+    saveFoodSeenCounts(seenCounts);
+  }
+
+  return selected;
 }
 
 function readLngLat(location) {
@@ -285,6 +359,116 @@ function searchPlaceLocation(AMap, place) {
   });
 }
 
+function searchPlaceSuggestions(AMap, query) {
+  return new Promise((resolve) => {
+    const searcher = new AMap.PlaceSearch({
+      pageSize: maxPlaceSuggestions,
+      pageIndex: 1,
+      citylimit: false,
+      extensions: "base",
+    });
+
+    searcher.search(query, (status, result) => {
+      if (status === "complete") {
+        resolve(result?.poiList?.pois || []);
+      } else {
+        resolve([]);
+      }
+    });
+  });
+}
+
+function getPlaceSuggestionLabel(poi) {
+  const city = String(poi.cityname || poi.pname || "").replace("市", "");
+  const district = String(poi.adname || "");
+  const address = String(poi.address || "");
+
+  return [city, district, address]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function hidePlaceSuggestions() {
+  foodState.placeSuggestions = [];
+  if (foodPlaceSuggestions) {
+    foodPlaceSuggestions.hidden = true;
+    foodPlaceSuggestions.innerHTML = "";
+  }
+}
+
+function renderPlaceSuggestions(suggestions, note = "") {
+  if (!foodPlaceSuggestions) return;
+
+  foodState.placeSuggestions = suggestions;
+
+  if (!suggestions.length) {
+    foodPlaceSuggestions.hidden = false;
+    foodPlaceSuggestions.innerHTML = `
+      <div class="place-suggestion-empty">${escapeHtml(note || "暂时没有找到可选地址，可以加上城市名再试。")}</div>
+    `;
+    return;
+  }
+
+  const referenceLocation = foodState.userLocation || foodState.resolvedCenter;
+  const sortedSuggestions = referenceLocation
+    ? [...suggestions].sort((a, b) => {
+        const distanceA = getDistanceMeters(referenceLocation, a.location) ?? Number.POSITIVE_INFINITY;
+        const distanceB = getDistanceMeters(referenceLocation, b.location) ?? Number.POSITIVE_INFINITY;
+        return distanceA - distanceB;
+      })
+    : suggestions;
+
+  foodState.placeSuggestions = sortedSuggestions;
+  foodPlaceSuggestions.hidden = false;
+  foodPlaceSuggestions.innerHTML = sortedSuggestions.map((poi, index) => {
+    const distance = referenceLocation ? getDistanceMeters(referenceLocation, poi.location) : null;
+    const distanceLabel = formatDistanceLabel(distance);
+    const meta = getPlaceSuggestionLabel(poi);
+
+    return `
+      <button class="place-suggestion-item" type="button" data-place-suggestion-index="${index}">
+        <span>
+          <strong>${escapeHtml(poi.name || "未命名地点")}</strong>
+          <small>${escapeHtml(meta || "点击选择这个地点")}</small>
+        </span>
+        ${distanceLabel ? `<em>约 ${escapeHtml(distanceLabel)}</em>` : "<em>选择</em>"}
+      </button>
+    `;
+  }).join("");
+}
+
+async function refreshPlaceSuggestions(query, shouldShowEmpty = false) {
+  if (!query || query.length < 2 || /^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/.test(query)) {
+    hidePlaceSuggestions();
+    return [];
+  }
+
+  try {
+    const AMap = await loadAmap();
+    const suggestions = await searchPlaceSuggestions(AMap, query);
+    renderPlaceSuggestions(suggestions, shouldShowEmpty ? "没有找到同名地点，可以加上城市或区名再试。" : "");
+    return suggestions;
+  } catch {
+    if (shouldShowEmpty) {
+      renderPlaceSuggestions([], "地点候选加载失败，请检查高德 Key、网络或白名单。");
+    }
+    return [];
+  }
+}
+
+async function choosePlaceSuggestion(index) {
+  const poi = foodState.placeSuggestions[index];
+  if (!poi?.location) return;
+
+  const AMap = await loadAmap();
+  const readableAddress = await reverseGeocodeLocation(AMap, poi.location, getPlaceSuggestionLabel(poi) || poi.name);
+  setResolvedFoodPlace(readableAddress, poi.location);
+  hidePlaceSuggestions();
+  updateFoodResolveButton();
+  updateFoodSearchButtonLabel();
+  renderFoodMessage("定位已确认", `已经选择“${readableAddress}”，现在可以点击“搜索附近美食”。`);
+}
+
 async function geocodePlace(AMap, place) {
   const coordinateMatch = place.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
   if (coordinateMatch) {
@@ -334,6 +518,30 @@ function getLocationArray(location) {
   }
 
   return [lng, lat];
+}
+
+function getDistanceMeters(from, to) {
+  const fromLocation = getLocationArray(from);
+  const toLocation = getLocationArray(to);
+
+  if (!fromLocation || !toLocation) return null;
+
+  const [fromLng, fromLat] = fromLocation;
+  const [toLng, toLat] = toLocation;
+  const toRad = (value) => value * Math.PI / 180;
+  const earthRadius = 6371000;
+  const dLat = toRad(toLat - fromLat);
+  const dLng = toRad(toLng - fromLng);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(fromLat)) * Math.cos(toRad(toLat)) * Math.sin(dLng / 2) ** 2;
+
+  return Math.round(earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+function formatDistanceLabel(distance) {
+  if (!Number.isFinite(distance)) return "";
+  if (distance >= 1000) return `${(distance / 1000).toFixed(distance >= 10000 ? 0 : 1)}km`;
+  return `${Math.round(distance)}m`;
 }
 
 function formatReadableAddress(regeocode, fallback = "") {
@@ -472,6 +680,7 @@ async function searchFoodMerchants(place) {
 
         seen.add(id);
         merchants.push({
+          id,
           name: poi.name,
           address: poi.address,
           distance: poi.distance,
@@ -485,11 +694,14 @@ async function searchFoodMerchants(place) {
     });
   }
 
-  const randomCandidatePool = shuffleItems(merchants).slice(0, Math.min(maxFoodCandidates, merchants.length));
+  const randomCandidatePool = pickWeightedMerchants(
+    merchants,
+    Math.min(maxFoodCandidates, merchants.length),
+    false
+  );
   foodState.candidateCount = randomCandidatePool.length;
 
-  return shuffleItems(randomCandidatePool)
-    .slice(0, maxFoodResults)
+  return pickWeightedMerchants(randomCandidatePool, maxFoodResults, true)
     .sort(compareFoodMerchants);
 }
 
@@ -609,6 +821,11 @@ foodPlaceInput?.addEventListener("input", () => {
 
   updateFoodResolveButton();
   updateFoodSearchButtonLabel();
+
+  window.clearTimeout(foodState.placeSuggestionTimer);
+  foodState.placeSuggestionTimer = window.setTimeout(() => {
+    refreshPlaceSuggestions(foodPlaceInput.value.trim());
+  }, 360);
 });
 
 foodResolveButton?.addEventListener("click", async () => {
@@ -621,10 +838,22 @@ foodResolveButton?.addEventListener("click", async () => {
 
   foodResolveButton.disabled = true;
   foodResolveButton.textContent = "搜索中";
-  renderFoodMessage("正在搜索定位", "正在用高德地图识别你输入的位置，成功后会自动转换成经纬度。");
+  renderFoodMessage("正在搜索定位", "正在查找同名地点。如果出现多个候选，请先选择你想看的地址。");
 
   try {
     const AMap = await loadAmap();
+    const suggestions = await refreshPlaceSuggestions(place, true);
+
+    if (suggestions.length > 1) {
+      renderFoodMessage("请选择地址", "下面列出了几个同名或相似地点，优先显示离你更近的地址。");
+      return;
+    }
+
+    if (suggestions.length === 1) {
+      await choosePlaceSuggestion(0);
+      return;
+    }
+
     const location = await geocodePlace(AMap, place);
     const formattedLocation = formatLocation(location);
 
@@ -655,8 +884,10 @@ foodLocateButton?.addEventListener("click", async () => {
     const { longitude, latitude } = position.coords;
     const location = [longitude, latitude];
     const AMap = await loadAmap();
+    foodState.userLocation = location;
     const readableAddress = await reverseGeocodeLocation(AMap, location, "当前位置");
     setResolvedFoodPlace(readableAddress, location);
+    hidePlaceSuggestions();
     updateFoodResolveButton();
     updateFoodSearchButtonLabel();
     renderFoodMessage("定位成功", `已经定位到“${readableAddress}”，可以直接点击“搜索附近美食”。`);
@@ -666,6 +897,13 @@ foodLocateButton?.addEventListener("click", async () => {
     foodLocateButton.disabled = false;
     foodLocateButton.textContent = "实时定位";
   }
+});
+
+foodPlaceSuggestions?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-place-suggestion-index]");
+  if (!button) return;
+
+  choosePlaceSuggestion(Number(button.dataset.placeSuggestionIndex));
 });
 
 foodSearchButton?.addEventListener("click", async () => {
