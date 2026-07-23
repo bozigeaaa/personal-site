@@ -11,6 +11,13 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <header class="topbar" aria-label="页面导航">
+      <nav class="tab-nav">
+        <button class="tab-button is-active" type="button" data-tab="tools">今天吃什么？</button>
+        <button class="tab-button" type="button" data-tab="shenzhen-food">深圳美食店铺</button>
+      </nav>
+    </header>
+
     <main>
       <section class="tab-panel is-active" id="tools" aria-labelledby="tools-title">
         <div class="tools-head shell">
@@ -106,6 +113,30 @@
           </div>
         </section>
       </section>
+
+      <section class="tab-panel" id="shenzhen-food" aria-labelledby="shenzhen-food-title">
+        <section class="sheet-food-tool shell" aria-label="深圳美食表格推荐">
+          <div class="sheet-food-head">
+            <div>
+              <p class="mini-label">SHENZHEN LIST</p>
+              <h1 class="stamp-title" id="shenzhen-food-title">已攻略店铺推荐</h1>
+              <ol class="sheet-source-note">
+                <li>已攻略店铺是基于深圳美食群群友写的共享文档提供的内容。</li>
+                <li>如果想新增已攻略店铺，可以照常写在群公告的表格中，不定时更新内容到网页中。</li>
+              </ol>
+            </div>
+            <button class="comic-button sheet-random-button" type="button" data-sheet-random>
+              点我，可以从已攻略中的店铺里随机抽取吃什么
+            </button>
+          </div>
+
+          <div class="sheet-food-panel">
+            <div class="sheet-filter-row" aria-label="深圳区域筛选" data-sheet-districts></div>
+            <p class="sheet-food-count" data-sheet-count></p>
+            <div class="sheet-food-grid" data-sheet-results></div>
+          </div>
+        </section>
+      </section>
     </main>
 
     <div class="food-overlay" data-food-overlay hidden>
@@ -115,6 +146,20 @@
         <h2>今天就吃这个</h2>
         <div data-food-picked></div>
         <button class="comic-button food-again-button" type="button" data-food-random-again>
+          <span class="button-icon">↻</span>
+          继续随机
+        </button>
+        <p>点击卡片外任意位置关闭</p>
+      </section>
+    </div>
+
+    <div class="food-overlay" data-sheet-overlay hidden>
+      <section class="food-pop-card sheet-pop-card" aria-label="随机表格美食结果">
+        <button class="modal-close-button" type="button" data-overlay-close aria-label="关闭">×</button>
+        <span class="contact-badge">SHEET PICK</span>
+        <h2>表格推荐这一家</h2>
+        <div data-sheet-picked></div>
+        <button class="comic-button food-again-button" type="button" data-sheet-random-again>
           <span class="button-icon">↻</span>
           继续随机
         </button>
